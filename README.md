@@ -97,7 +97,7 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
    - URL：`http://moviepilot:3000/api/v1/plugin/NapCatMsg/report`（容器内服务名跨机部署时换成实际地址）
    - Token：与插件「上报令牌」一致
    - 上报类型：保持默认即可
-3. 保存后用配置的 QQ 号私聊机器人发送 `/search 头文字D`，机器人应私聊回复搜索结果
+3. 保存后用配置的 QQ 号私聊机器人发送 `搜索 头文字D`（或 `/search 头文字D`），机器人应私聊回复搜索候选列表
 
 命令与 MoviePilot 内置 Telegram/微信机器人的命令语法一致（`/search`、`/subscribe`、`/rename` 等，可在 `设定` -> `服务` 中查看命令列表）。群聊中发送命令同样生效，回复会私聊发给发送者。
 
@@ -135,7 +135,9 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 
 开启后，在 QQ 中给机器人发消息即可远程控制 MoviePilot：
 
-- 命令语法与 MoviePilot 内置 Telegram/微信机器人一致：`/search 关键词` 搜索、`/subscribe 标题 [TMDBID]` 添加订阅、`/renew` 重新识别等，完整命令可在 MoviePilot `设定` -> `服务` 中查看
+- V3 使用中文动词交互（与微信等内置渠道一致）：`搜索 头文字D`、`下载 名称`、`订阅 标题 [TMDBID]`、`洗版 名称`，随后按提示回复数字选择结果
+- 插件已做斜杠命令兼容：`/search 关键词`、`/subscribe 标题`、`/download 名称`、`/resubscribe 名称` 会自动映射为对应中文动词
+- 系统类斜杠命令仍直接可用：`/version`、`/downloading`、`/subscribes`、`/sites`、`/restart`、`/clear_session` 等
 - 私聊和群聊均可发送命令；执行结果会私聊回复给发送者
 - 群聊中 @机器人 发送的命令会自动去除 @ 前缀
 - 通过 NapCat 的「HTTP上报」功能把 QQ 消息推送到插件端点 `/api/v1/plugin/NapCatMsg/report`，插件校验上报令牌后转交 MoviePilot 消息链处理

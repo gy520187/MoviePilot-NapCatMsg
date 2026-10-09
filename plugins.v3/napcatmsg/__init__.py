@@ -24,7 +24,7 @@ class NapCatMsg(_PluginBase):
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/NapNeko?v=4"
     # 插件版本，需与 package.v3.json 中保持一致
-    plugin_version = "1.1.2"
+    plugin_version = "1.1.3"
     # 插件作者
     plugin_author = "monkeycode"
     # 作者主页
@@ -501,6 +501,9 @@ class NapCatMsg(_PluginBase):
         else:
             logger.info(f"收到QQ私聊用户[{user_id}]命令：{text[:50]}")
 
+        # V3宿主使用中文动词识别媒体交互，兼容V2风格的斜杠命令
+        text = self._normalize_command(text)
+
         thread = threading.Thread(
             target=self._handle_inbound,
             args=(user_id, sender, text, body.get("message_id")),
@@ -508,6 +511,25 @@ class NapCatMsg(_PluginBase):
         )
         thread.start()
         return {"status": "ok"}
+
+    # V2斜杠命令与V3交互动词的兼容映射
+    _SLASH_COMMAND_COMPAT = {
+        "/search": "搜索",
+        "/download": "下载",
+        "/subscribe": "订阅",
+        "/resubscribe": "洗版",
+    }
+
+    @classmethod
+    def _normalize_command(cls, text: str) -> str:
+        """
+        将V2风格的/search等斜杠命令转换为V3的中文动词交互命令
+        """
+        first, _, rest = text.strip().partition(" ")
+        mapped = cls._SLASH_COMMAND_COMPAT.get(first.lower())
+        if mapped is None:
+            return text
+        return f"{mapped} {rest.lstrip()}".strip()
 
     def _handle_inbound(self, userid: Any, username: str, text: str, message_id: Any = None):
         """
