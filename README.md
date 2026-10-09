@@ -35,7 +35,7 @@ QQ好友 / QQ群
 cp .env.example .env
 ```
 
-编辑 `.env`，至少修改 `NAPCAT_TOKEN` 为随机字符串（两侧鉴权使用），并按需修改 `MOVIEPILOT_API_TOKEN`、`NAPCAT_ACCOUNT`（机器人 QQ 号）。
+编辑 `.env`，至少修改 `NAPCAT_WEBUI_TOKEN` 为随机字符串（NapCat WebUI 登录令牌，固定后重启不变），并按需修改 `MOVIEPILOT_API_TOKEN`、`NAPCAT_ACCOUNT`（机器人 QQ 号）。OneBot 鉴权令牌在后面 NapCat WebUI 的「网络配置」中设置。
 
 ### 2. 启动服务
 
@@ -52,21 +52,23 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 
 ### 3. NapCat 扫码登录 QQ
 
-1. 查看启动日志获取 WebUI 登录 Token：`docker logs napcat`，日志中会输出 `WebUI Token: xxxx`
+1. 查看启动日志获取 WebUI 登录 Token：`docker logs napcat`，日志中会输出 `WebUI Token: xxxx`（在 `.env` 中设置了 `NAPCAT_WEBUI_TOKEN` 时即为该值，重启固定）
 2. 浏览器打开 `http://<服务器IP>:6099/webui`，输入 Token 登录
 3. 在 QQ 登录页使用手机 QQ 扫码登录（建议使用小号）
 4. 登录态已持久化到 `./napcat/qq`，重启容器无需重新扫码
 
-### 4. NapCat 配置 OneBot HTTP 服务器
+### 4. NapCat 配置 OneBot HTTP 服务器（通知下发链路）
 
 在 NapCat WebUI 中：`网络配置` -> `新建` -> `HTTP服务器`：
 
+- 名称：如 `moviepilot`（随意）
 - 启用：勾选
 - Host：`0.0.0.0`
-- Port：`3000`
-- Token：与 `.env` 中 `NAPCAT_TOKEN` 一致（未设置 token 则两侧都留空）
+- 端口：`3000`
+- 消息格式：`Array`
+- 鉴权 Token：自定义一段随机字符串（此令牌与插件 AccessToken 一致，与 WebUI 登录令牌是两回事）
 
-保存后，NapCat 侧配置完成。容器间通过 compose 内部网络互访，`http://napcat:3000` 即 NapCat 的 OneBot HTTP 接口。
+保存后，NapCat 侧配置完成。容器间通过 compose 内部网络互访，`http://napcat:3000` 即 NapCat 的 OneBot HTTP 接口（该端口仅容器网络内可达，未映射宿主机属预期）。
 
 ### 5. MoviePilot 安装并配置插件
 
