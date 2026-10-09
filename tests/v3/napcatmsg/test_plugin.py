@@ -363,6 +363,11 @@ def main():
     res = asyncio.run(plugin4t.report(Request(
         query_params={"access_token": "report-secret"}, body=body)))
     assert res == {"status": "ok"} and wait_for(2), "query参数令牌应放行"
+    res = asyncio.run(plugin4t.report(Request(
+        headers={"authorization": "report-secret"}, body=body)))
+    assert res == {"status": "ok"} and wait_for(3), "无Bearer前缀的裸Token头应放行"
+    res = asyncio.run(plugin4t.report(Request(body=body)))
+    assert res == {"status": "forbidden"}, "无鉴权信息的请求应被拒绝"
     print("[PASS] 上报令牌校验与入站命令转发正确")
 
     # 12. report：心跳等元事件、非管理员、空文本
@@ -370,17 +375,17 @@ def main():
     plugin4b.init_plugin({"enabled": True, "onlyonce": False, "host": "http://napcat:3000",
                           "interaction": True, "report_token": "", "admin_users": "10001,20002"})
     res = asyncio.run(plugin4b.report(Request(body={"post_type": "meta_event", "meta_event_type": "heartbeat"})))
-    assert res == {"status": "ok"} and len(handled_messages) == 2, "心跳事件不应触发命令处理"
+    assert res == {"status": "ok"} and len(handled_messages) == 3, "心跳事件不应触发命令处理"
     res = asyncio.run(plugin4b.report(Request(body={
         "post_type": "message", "message_type": "group", "user_id": 99999,
         "raw_message": "/search x", "group_id": 88888888, "sender": {"nickname": "路人"},
     })))
-    assert res == {"status": "ok"} and len(handled_messages) == 2, "非可交互用户命令应被忽略"
+    assert res == {"status": "ok"} and len(handled_messages) == 3, "非可交互用户命令应被忽略"
     res = asyncio.run(plugin4b.report(Request(body={
         "post_type": "message", "message_type": "private", "user_id": 10001,
         "raw_message": "[CQ:at,qq=10000]", "sender": {"nickname": "阿明"},
     })))
-    assert res == {"status": "ok"} and len(handled_messages) == 2, "无有效文本的上报不应触发命令处理"
+    assert res == {"status": "ok"} and len(handled_messages) == 3, "无有效文本的上报不应触发命令处理"
     print("[PASS] 心跳/非管理员/空文本过滤正确")
 
     # 13. report：群聊命令处理 + 命令执行异常兜底（直接调用_handle_inbound验证）
@@ -391,8 +396,8 @@ def main():
         "post_type": "message", "message_type": "group", "user_id": 10001,
         "raw_message": "/search 头文字D", "group_id": 88888888, "sender": {"nickname": "阿明"},
     })))
-    assert res == {"status": "ok"} and wait_for(3), "群聊命令应正常处理"
-    assert handled_messages[2]["userid"] == 10001, "群聊命令应记录发送者QQ号"
+    assert res == {"status": "ok"} and wait_for(4), "群聊命令应正常处理"
+    assert handled_messages[3]["userid"] == 10001, "群聊命令应记录发送者QQ号"
 
     handled_messages.clear()
     captured_requests.clear()

@@ -156,7 +156,7 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 
 **QQ 掉线频繁**：建议使用活跃度较高的小号，长期使用请开启设备锁，并保持登录态目录 `./napcat/qq` 持久化。
 
-**QQ 发命令无反应**：依次检查：1) NapCat WebUI「网络配置」中 HTTP上报 已启用且 URL 为 `http://moviepilot:3000/api/v1/plugin/NapCatMsg/report`；2) 上报 Token 与插件「上报令牌」一致；3) 插件已开启「双向交互」且发送者 QQ 在「可交互QQ号」名单内；4) MoviePilot 日志中搜索「收到QQ」，确认消息是否到达插件。
+**QQ 发命令无反应**：依次检查：1) NapCat WebUI「网络配置」中 HTTP上报 已启用且 URL 为 `http://<MoviePilot地址>:端口/api/v1/plugin/NapCatMsg/report`；2) 上报 Token 与插件「上报令牌」一致（插件日志会提示请求携带的鉴权形式，NapCat 侧 Token 留空时插件侧也需清空上报令牌）；3) 插件已开启「双向交互」且发送者 QQ 在「可交互QQ号」名单内；4) MoviePilot 日志中搜索「收到QQ」，确认消息是否到达插件。
 
 **双向交互回复了「命令执行失败」**：查看 MoviePilot 运行日志定位异常堆栈；多数情况是 TMDB 网络问题或媒体库访问异常。
 

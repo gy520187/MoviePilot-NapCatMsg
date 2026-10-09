@@ -23,7 +23,7 @@ class NapCatMsg(_PluginBase):
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/NapNeko?v=4"
     # 插件版本，需与 package.v3.json 中保持一致
-    plugin_version = "1.1.0"
+    plugin_version = "1.1.1"
     # 插件作者
     plugin_author = "monkeycode"
     # 作者主页
@@ -404,10 +404,14 @@ class NapCatMsg(_PluginBase):
         expected = (self._report_token or "").strip()
         if not expected:
             return True
-        # OneBot11 HTTP上报：Authorization: Bearer <token>
+        # OneBot11 HTTP上报标准：Authorization: Bearer <token>
         auth_header = request.headers.get("authorization") or ""
         if auth_header.startswith("Bearer ") and hmac.compare_digest(
                 auth_header[7:].strip(), expected):
+            return True
+        # 兼容无Bearer前缀的裸Token请求头（部分协议端实现）
+        if auth_header and " " not in auth_header.strip() and hmac.compare_digest(
+                auth_header.strip(), expected):
             return True
         # 兼容URL携带token / access_token参数
         for key in ("token", "access_token"):
@@ -415,6 +419,20 @@ class NapCatMsg(_PluginBase):
             if value and hmac.compare_digest(value, expected):
                 return True
         return False
+
+    def _describe_request_auth(self, request: Request) -> str:
+        """
+        描述上报请求携带的鉴权形式（不输出令牌值），用于鉴权失败排障
+        """
+        auth_header = (request.headers.get("authorization") or "").strip()
+        if auth_header.startswith("Bearer "):
+            return "Authorization: Bearer头"
+        if auth_header:
+            return "裸Authorization头"
+        for key in ("token", "access_token"):
+            if request.query_params.get(key):
+                return f"URL参数{key}"
+        return "无鉴权信息"
 
     def _is_admin_user(self, user_id: Any) -> bool:
         """
@@ -435,7 +453,9 @@ class NapCatMsg(_PluginBase):
         if not self.get_state() or not self._interaction:
             return {"status": "ignored"}
         if not self._verify_report_token(request):
-            logger.warning("NapCat消息上报鉴权失败，请检查插件的上报令牌配置")
+            logger.warning(
+                f"NapCat消息上报鉴权失败：请求携带{self._describe_request_auth(request)}，"
+                "请确认NapCat「HTTP上报」配置中的Token与插件「上报令牌」完全一致，或将NapCat侧Token留空并在插件侧也清空上报令牌")
             return {"status": "forbidden"}
         try:
             body = await request.json()
