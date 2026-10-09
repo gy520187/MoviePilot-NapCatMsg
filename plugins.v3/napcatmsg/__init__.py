@@ -24,7 +24,7 @@ class NapCatMsg(_PluginBase):
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/NapNeko?v=4"
     # 插件版本，需与 package.v3.json 中保持一致
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     # 插件作者
     plugin_author = "monkeycode"
     # 作者主页
@@ -87,6 +87,95 @@ class NapCatMsg(_PluginBase):
             or self._parse_ids(self._send_groups)
             or self._interaction
         ))
+
+    def get_module(self) -> Optional[Dict[str, Any]]:
+        """
+        声明插件模块方法，参与宿主模块分发：拦截发往QQ渠道的媒体/种子候选列表
+        消息（post_medias_message/post_torrents_message走消息队列直投模块，不广播
+        NoticeMessage事件），将其文本化后私聊回复给发起交互的QQ用户
+        """
+        return {
+            "post_medias_message": self._module_post_medias_message,
+            "post_torrents_message": self._module_post_torrents_message,
+        }
+
+    def _module_post_medias_message(self, message, medias) -> None:
+        """
+        模块方法：QQ渠道媒体候选列表转发到QQ私聊
+        :param message: 消息体（含标题、目标用户）
+        :param medias: 当前页媒体列表
+        """
+        if not self._is_qq_interaction_message(message):
+            return
+        lines = self._format_medias_text(medias)
+        self._send_reply(message.title or "媒体候选", "\n".join(lines),
+                         getattr(message, "userid", None))
+
+    def _module_post_torrents_message(self, message, torrents) -> None:
+        """
+        模块方法：QQ渠道种子候选列表转发到QQ私聊
+        :param message: 消息体（含标题、目标用户）
+        :param torrents: 当前页候选资源列表（Context）
+        """
+        if not self._is_qq_interaction_message(message):
+            return
+        lines = self._format_torrents_text(torrents)
+        self._send_reply(message.title or "资源候选", "\n".join(lines),
+                         getattr(message, "userid", None))
+
+    @staticmethod
+    def _is_qq_interaction_message(message) -> bool:
+        """
+        判断候选消息是否属于QQ渠道且带有明确的私聊目标用户
+        """
+        if message is None:
+            return False
+        channel = getattr(message, "channel", None)
+        channel_value = getattr(channel, "value", channel)
+        if channel_value != NotificationChannel.QQ.value:
+            return False
+        return bool(getattr(message, "userid", None))
+
+    @staticmethod
+    def _format_medias_text(medias) -> List[str]:
+        """
+        将媒体列表格式化为候选序号文本，与宿主数字选择交互对应
+        """
+        lines = []
+        for index, media in enumerate(medias or [], start=1):
+            title = getattr(media, "title", None) or "未知媒体"
+            year = getattr(media, "year", None)
+            vote = getattr(media, "vote_average", None)
+            parts = [f"{index}. {title}"]
+            if year:
+                parts.append(f"({year})")
+            if vote:
+                parts.append(f"[{vote}分]")
+            lines.append(" ".join(parts))
+        return lines
+
+    @staticmethod
+    def _format_torrents_text(torrents) -> List[str]:
+        """
+        将候选资源列表格式化为候选序号文本，与宿主数字选择交互对应
+        """
+        lines = []
+        for index, context in enumerate(torrents or [], start=1):
+            torrent = getattr(context, "torrent_info", None)
+            if torrent is None:
+                continue
+            title = getattr(torrent, "title", None) or "未知资源"
+            site = getattr(torrent, "site_name", None)
+            size = getattr(torrent, "size", 0) or 0
+            seeders = getattr(torrent, "seeders", 0) or 0
+            parts = [f"{index}. {title}"]
+            if site:
+                parts.append(f"[{site}]")
+            if size:
+                parts.append(f"{size / 1024 / 1024 / 1024:.2f}GB")
+            parts.append(f"做种:{seeders}")
+            lines.append(" ".join(parts))
+        return lines
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:

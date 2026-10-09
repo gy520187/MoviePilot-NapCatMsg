@@ -462,6 +462,67 @@ def main():
     assert len(captured_requests) == 0, "标题内容均为空的回复不应发送"
     print("[PASS] QQ渠道双向回复正确")
 
+    # 15. get_module：媒体/种子候选列表经模块分发转发QQ私聊
+    module_table = plugin.get_module()
+    assert isinstance(module_table, dict) and set(module_table) == {
+        "post_medias_message", "post_torrents_message"}, "get_module应声明两个候选消息模块方法"
+
+    class _FakeMessage:
+        def __init__(self, channel=None, userid=None, title=None):
+            self.channel = channel
+            self.userid = userid
+            self.title = title
+
+    class _FakeMedia:
+        def __init__(self, title, year=None, vote_average=None):
+            self.title = title
+            self.year = year
+            self.vote_average = vote_average
+
+    class _FakeTorrentInfo:
+        def __init__(self, title, site_name=None, size=0, seeders=0):
+            self.title = title
+            self.site_name = site_name
+            self.size = size
+            self.seeders = seeders
+
+    class _FakeContext:
+        def __init__(self, torrent_info):
+            self.torrent_info = torrent_info
+
+    captured_requests.clear()
+    result = module_table["post_medias_message"](
+        _FakeMessage(channel=NotificationChannel.QQ, userid=10001,
+                     title="【搜索 头文字D】共找到2条相关信息，请回复对应数字选择"),
+        [_FakeMedia("头文字D", "2005", 8.5), _FakeMedia("头文字D 新剧场版")],
+    )
+    assert result is None, "候选消息模块方法应返回None以避免短路宿主分发"
+    assert len(captured_requests) == 1, "QQ渠道候选列表应私聊发送一条"
+    assert captured_requests[0]["data"]["user_id"] == 10001, "候选列表应发给发起交互的用户"
+    media_text = captured_requests[0]["data"]["message"][0]["data"]["text"]
+    assert "1. 头文字D (2005) [8.5分]" in media_text, f"媒体候选应含序号/年份/评分: {media_text}"
+    assert "2. 头文字D 新剧场版" in media_text, "无年份媒体也应列出"
+    captured_requests.clear()
+    module_table["post_medias_message"](
+        _FakeMessage(channel=NotificationChannel.Telegram, userid=10001, title="t"),
+        [_FakeMedia("x")])
+    module_table["post_medias_message"](
+        _FakeMessage(channel=NotificationChannel.QQ, title="no-user"),
+        [_FakeMedia("x")])
+    module_table["post_medias_message"](None, [])
+    assert len(captured_requests) == 0, "非QQ渠道或无目标用户的候选列表不应发送"
+    captured_requests.clear()
+    module_table["post_torrents_message"](
+        _FakeMessage(channel=NotificationChannel.QQ, userid=10001,
+                     title="【搜索 头文字D】共找到1条相关资源，请选择下载"),
+        [_FakeContext(_FakeTorrentInfo("Initial.D.S01.1080p", site_name="U2",
+                                       size=4.3 * 1024 ** 3, seeders=12))])
+    assert len(captured_requests) == 1, "QQ渠道种子候选应私聊发送一条"
+    torrent_text = captured_requests[0]["data"]["message"][0]["data"]["text"]
+    assert "1. Initial.D.S01.1080p [U2] 4.30GB 做种:12" in torrent_text, \
+        f"种子候选应含序号/站点/体积/做种: {torrent_text}"
+    print("[PASS] get_module 候选列表转发QQ私聊正确")
+
     print("\n全部测试通过")
 
 

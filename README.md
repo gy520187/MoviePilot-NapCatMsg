@@ -138,6 +138,7 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 - V3 使用中文动词交互：`搜索 头文字D`、`下载 名称`、`订阅 标题 [TMDBID]`、`洗版 名称`，随后按提示回复数字选择结果
 - 系统类斜杠命令直接可用：`/version`、`/downloading`、`/subscribes`、`/sites`、`/restart`、`/clear_session` 等
 - 私聊和群聊均可发送命令；执行结果会私聊回复给发送者
+- 搜索/下载产生的媒体、资源候选列表同样会私聊回复给发起交互的用户（插件通过模块声明拦截 QQ 渠道的候选消息并转成文本），回复数字即可继续选择
 - 群聊中 @机器人 发送的命令会自动去除 @ 前缀
 - 通过 NapCat 的「HTTP上报」功能把 QQ 消息推送到插件端点 `/api/v1/plugin/NapCatMsg/report`，插件校验上报令牌后原样转交 MoviePilot 消息链处理
 - 收到的命令只在「可交互QQ号」名单内的用户生效，防止陌生人滥用
