@@ -1,0 +1,15 @@
+{
+  "NapCatMsg": {
+    "name": "QQ消息通知（NapCat）",
+    "description": "通过NapCat（OneBot11）接口，向QQ好友或群聊发送MoviePilot消息通知。",
+    "labels": "消息通知,QQ",
+    "version": "1.0.0",
+    "icon": "https://avatars.githubusercontent.com/NapNeko?v=4",
+    "author": "monkeycode",
+    "level": 1,
+    "system_version": ">=3.0.0",
+    "history": {
+      "v1.0.0": "首个版本：支持通过NapCat HTTP接口发送私聊、群聊通知，支持消息类型过滤、@全体成员与图片消息"
+    }
+  }
+}

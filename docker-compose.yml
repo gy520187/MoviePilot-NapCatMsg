@@ -1,6 +1,6 @@
 services:
   moviepilot:
-    image: jxxghp/moviepilot-v2:latest
+    image: jxxghp/moviepilot-v3:latest
     container_name: moviepilot
     restart: unless-stopped
     ports:

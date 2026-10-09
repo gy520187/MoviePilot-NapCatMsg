@@ -1,10 +1,14 @@
 # MoviePilot 对接 NapCat QQ 消息通知
 
-本仓库提供 MoviePilot V2 与 NapCatQQ 对接的完整方案，包含：
+本仓库提供 MoviePilot 与 NapCatQQ 对接的完整方案，同时适配 V3 与 V2：
 
-- `plugins.v2/napcatmsg/`：自制消息通道插件「QQ消息通知（NapCat）」，通过 NapCat 的 OneBot 11 HTTP 接口把 MoviePilot 的通知转发到 QQ 好友私聊或群聊
-- `package.v2.json`：插件市场索引，MoviePilot 可直接把本仓库添加为插件市场
-- `docker-compose.yml` + `.env.example`：MoviePilot + NapCat 一键部署编排
+- `plugins.v3/napcatmsg/`：V3 插件「QQ消息通知（NapCat）」（基于 `app.sdk` 稳定接口，MoviePilot v3.1.0 验证目标）
+- `package.v3.json`：V3 插件市场索引，V3 宿主可直接把本仓库添加为插件市场
+- `plugins.v2/napcatmsg/`：V2 插件（旧版本 MoviePilot 宿主使用）
+- `package.v2.json`：V2 插件市场索引
+- `docker-compose.yml` + `.env.example`：MoviePilot V3 + NapCat 一键部署编排
+
+插件通过 NapCat 的 OneBot 11 HTTP 接口，把 MoviePilot 的通知转发到 QQ 好友私聊或群聊，支持消息类型过滤、@全体成员与图片消息。
 
 消息链路：
 
@@ -31,7 +35,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-两个容器的角色：
+compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色：
 
 | 服务 | 端口 | 用途 |
 |------|------|------|
@@ -60,6 +64,7 @@ docker compose up -d
 
 1. 浏览器打开 `http://<服务器IP>:3000`，使用超级管理员登录
 2. 进入 `插件` 市场，在自定义插件源中添加本仓库地址后刷新，找到「QQ消息通知（NapCat）」并安装
+   - V3 宿主自动读取 `package.v3.json`，旧 V2 宿主读取 `package.v2.json`，同一仓库两个版本通吃
 3. 打开插件配置：
    - 启用插件：开
    - NapCat服务地址：`http://napcat:3000`（与 napcat 容器同 compose 网络时直接用服务名）
@@ -76,9 +81,15 @@ docker compose up -d
 
 方式一（推荐）：把本仓库 fork 或推送到自己的 GitHub 仓库，然后在 MoviePilot `设定` -> `系统` -> `插件市场` 中追加该仓库地址，刷新插件市场后安装。
 
-方式二：手动把 `plugins.v2/napcatmsg/` 目录复制到 MoviePilot 的插件目录 `/config/plugins/` 下并重启容器。
+方式二：手动复制插件目录并重启容器：
+- V3 宿主：把 `plugins.v3/napcatmsg/` 复制到 `/config/plugins/` 下
+- V2 宿主：把 `plugins.v2/napcatmsg/` 复制到 `/config/plugins/` 下
 
 插件通过监听 MoviePilot 的消息通知事件工作，与 Telegram、微信等内置渠道互不冲突，可同时使用。
+
+### V2 升级 V3 提示
+
+按官方迁移指引：把 compose 中镜像改为 `jxxghp/moviepilot-v3:latest` 后拉取重建容器，配置目录映射保持不变，数据库可自动向前升级（升级前建议完整备份 `/config`）。
 
 ## 插件配置项
 
@@ -109,15 +120,20 @@ docker compose up -d
 
 ```
 .
-├── docker-compose.yml       # MoviePilot + NapCat 一键部署
-├── .env.example             # 环境变量模板
-├── package.v2.json          # 插件市场索引
-├── plugins.v2/napcatmsg/    # QQ消息通知（NapCat）插件
-└── tests/                   # 插件 smoke test
+├── docker-compose.yml           # MoviePilot V3 + NapCat 一键部署
+├── .env.example                 # 环境变量模板
+├── package.v3.json              # V3 插件市场索引
+├── plugins.v3/napcatmsg/        # V3 插件（app.sdk 接口）
+├── package.v2.json              # V2 插件市场索引
+├── plugins.v2/napcatmsg/        # V2 插件（旧宿主）
+└── tests/
+    ├── v2/napcatmsg/            # V2 插件 smoke test
+    └── v3/napcatmsg/            # V3 插件 smoke test
 ```
 
 ## 本地验证插件
 
 ```bash
-python3 tests/test_napcatmsg_smoke.py
+python3 tests/v2/napcatmsg/test_plugin.py
+python3 tests/v3/napcatmsg/test_plugin.py
 ```

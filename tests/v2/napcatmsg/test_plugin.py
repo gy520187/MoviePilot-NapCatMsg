@@ -1,12 +1,14 @@
-"""NapCat消息通知插件 smoke test，mock MoviePilot 宿主依赖并验证插件核心逻辑。"""
+"""NapCat消息通知插件 V2 smoke test，mock MoviePilot 宿主依赖并验证插件核心逻辑。"""
 import importlib.util
 import json
 import logging
+import os
 import sys
 import types
 from enum import Enum
 
-PLUGIN_PATH = "/workspace/plugins.v2/napcatmsg/__init__.py"
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+PLUGIN_PATH = os.path.join(REPO_ROOT, "plugins.v2", "napcatmsg", "__init__.py")
 
 captured_requests = []
 saved_config = {}
