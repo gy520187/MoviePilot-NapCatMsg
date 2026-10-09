@@ -1,5 +1,7 @@
 """NapCat消息通知插件 V3 smoke test，mock MoviePilot V3 宿主依赖并验证插件核心逻辑（含双向交互）。"""
 import asyncio
+import hashlib
+import hmac
 import importlib.util
 import json
 import logging
@@ -112,9 +114,17 @@ def make_fake_app():
         def __init__(self, headers=None, query_params=None, body=None):
             self.headers = headers or {}
             self.query_params = query_params or {}
-            self._body = body
+            if isinstance(body, (dict, list)):
+                self._body = json.dumps(body).encode()
+            elif isinstance(body, str):
+                self._body = body.encode()
+            else:
+                self._body = body or b""
 
         async def json(self):
+            return json.loads(self._body)
+
+        async def body(self):
             return self._body
 
     fastapi_mod.Request = Request
@@ -370,22 +380,36 @@ def main():
     assert res == {"status": "forbidden"}, "无鉴权信息的请求应被拒绝"
     print("[PASS] 上报令牌校验与入站命令转发正确")
 
+    # 11.1 report：NapCat HMAC-SHA1签名校验（NapCat把Token作为secret对请求体签名）
+    sign = hmac.new(b"report-secret", json.dumps(body).encode(), hashlib.sha1).hexdigest()
+    res = asyncio.run(plugin4t.report(Request(
+        headers={"x-signature": f"sha1={sign}"}, body=body)))
+    assert res == {"status": "ok"} and wait_for(4), "正确的x-signature签名应放行"
+    bad_sign = hmac.new(b"wrong-secret", json.dumps(body).encode(), hashlib.sha1).hexdigest()
+    res = asyncio.run(plugin4t.report(Request(
+        headers={"x-signature": f"sha1={bad_sign}"}, body=body)))
+    assert res == {"status": "forbidden"} and len(handled_messages) == 4, "错误签名应被拒绝"
+    res = asyncio.run(plugin4t.report(Request(
+        headers={"x-signature": "sha1=deadbeef"}, body=body)))
+    assert res == {"status": "forbidden"}, "非法签名应被拒绝"
+    print("[PASS] NapCat HMAC-SHA1签名校验正确")
+
     # 12. report：心跳等元事件、非管理员、空文本
     plugin4b = module.NapCatMsg()
     plugin4b.init_plugin({"enabled": True, "onlyonce": False, "host": "http://napcat:3000",
                           "interaction": True, "report_token": "", "admin_users": "10001,20002"})
     res = asyncio.run(plugin4b.report(Request(body={"post_type": "meta_event", "meta_event_type": "heartbeat"})))
-    assert res == {"status": "ok"} and len(handled_messages) == 3, "心跳事件不应触发命令处理"
+    assert res == {"status": "ok"} and len(handled_messages) == 4, "心跳事件不应触发命令处理"
     res = asyncio.run(plugin4b.report(Request(body={
         "post_type": "message", "message_type": "group", "user_id": 99999,
         "raw_message": "/search x", "group_id": 88888888, "sender": {"nickname": "路人"},
     })))
-    assert res == {"status": "ok"} and len(handled_messages) == 3, "非可交互用户命令应被忽略"
+    assert res == {"status": "ok"} and len(handled_messages) == 4, "非可交互用户命令应被忽略"
     res = asyncio.run(plugin4b.report(Request(body={
         "post_type": "message", "message_type": "private", "user_id": 10001,
         "raw_message": "[CQ:at,qq=10000]", "sender": {"nickname": "阿明"},
     })))
-    assert res == {"status": "ok"} and len(handled_messages) == 3, "无有效文本的上报不应触发命令处理"
+    assert res == {"status": "ok"} and len(handled_messages) == 4, "无有效文本的上报不应触发命令处理"
     print("[PASS] 心跳/非管理员/空文本过滤正确")
 
     # 13. report：群聊命令处理 + 命令执行异常兜底（直接调用_handle_inbound验证）
@@ -396,8 +420,8 @@ def main():
         "post_type": "message", "message_type": "group", "user_id": 10001,
         "raw_message": "/search 头文字D", "group_id": 88888888, "sender": {"nickname": "阿明"},
     })))
-    assert res == {"status": "ok"} and wait_for(4), "群聊命令应正常处理"
-    assert handled_messages[3]["userid"] == 10001, "群聊命令应记录发送者QQ号"
+    assert res == {"status": "ok"} and wait_for(5), "群聊命令应正常处理"
+    assert handled_messages[4]["userid"] == 10001, "群聊命令应记录发送者QQ号"
 
     handled_messages.clear()
     captured_requests.clear()

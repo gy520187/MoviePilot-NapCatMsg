@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 import json
 import re
@@ -23,7 +24,7 @@ class NapCatMsg(_PluginBase):
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/NapNeko?v=4"
     # 插件版本，需与 package.v3.json 中保持一致
-    plugin_version = "1.1.1"
+    plugin_version = "1.1.2"
     # 插件作者
     plugin_author = "monkeycode"
     # 作者主页
@@ -397,14 +398,25 @@ class NapCatMsg(_PluginBase):
             return "".join(parts).strip()
         return None
 
-    def _verify_report_token(self, request: Request) -> bool:
+    def _verify_report_token(self, request: Request, body_bytes: bytes = b"") -> bool:
         """
         校验NapCat上报请求的令牌；未配置上报令牌时放行
+        支持三种形式：HMAC-SHA1签名（NapCat HTTP上报实际行为）、
+        Authorization请求头（Bearer前缀或裸Token）、URL的token/access_token参数
         """
         expected = (self._report_token or "").strip()
         if not expected:
             return True
-        # OneBot11 HTTP上报标准：Authorization: Bearer <token>
+        # OneBot11标准HMAC-SHA1签名：NapCat把上报Token作为secret对请求体签名，
+        # 放在x-signature头（sha1=前缀），与go-cqhttp的secret行为一致
+        sign_header = (request.headers.get("x-signature") or "").strip()
+        if sign_header.lower().startswith("sha1=") and body_bytes:
+            sign_hex = sign_header[5:].strip().lower()
+            expected_sign = hmac.new(
+                expected.encode("utf-8"), body_bytes, hashlib.sha1).hexdigest()
+            if sign_hex and hmac.compare_digest(sign_hex, expected_sign):
+                return True
+        # 兼容其他协议端：Authorization: Bearer <token>
         auth_header = request.headers.get("authorization") or ""
         if auth_header.startswith("Bearer ") and hmac.compare_digest(
                 auth_header[7:].strip(), expected):
@@ -424,6 +436,9 @@ class NapCatMsg(_PluginBase):
         """
         描述上报请求携带的鉴权形式（不输出令牌值），用于鉴权失败排障
         """
+        sign_header = (request.headers.get("x-signature") or "").strip()
+        if sign_header:
+            return "x-signature签名头"
         auth_header = (request.headers.get("authorization") or "").strip()
         if auth_header.startswith("Bearer "):
             return "Authorization: Bearer头"
@@ -452,13 +467,17 @@ class NapCatMsg(_PluginBase):
         """
         if not self.get_state() or not self._interaction:
             return {"status": "ignored"}
-        if not self._verify_report_token(request):
+        try:
+            body_bytes = await request.body()
+        except Exception:
+            body_bytes = b""
+        if not self._verify_report_token(request, body_bytes):
             logger.warning(
                 f"NapCat消息上报鉴权失败：请求携带{self._describe_request_auth(request)}，"
                 "请确认NapCat「HTTP上报」配置中的Token与插件「上报令牌」完全一致，或将NapCat侧Token留空并在插件侧也清空上报令牌")
             return {"status": "forbidden"}
         try:
-            body = await request.json()
+            body = json.loads(body_bytes) if body_bytes else None
         except Exception:
             return {"status": "bad_request"}
         if not isinstance(body, dict) or body.get("post_type") != "message":
