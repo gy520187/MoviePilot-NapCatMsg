@@ -1,9 +1,15 @@
+import hmac
 import json
+import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
+from fastapi import Request
+
+from app.chain.message import MessageChain
 from app.sdk.plugin import _PluginBase
-from app.schemas.types import EventType, NotificationType
+from app.schemas.types import EventType, MessageType, NotificationChannel
 from app.sdk.events import Event, eventmanager
 from app.sdk.logging import logger
 from app.sdk.network import RequestUtils
@@ -13,11 +19,11 @@ class NapCatMsg(_PluginBase):
     # 插件名称
     plugin_name = "QQ消息通知（NapCat）"
     # 插件描述
-    plugin_desc = "通过NapCat（OneBot11）接口，向QQ好友或群聊发送MoviePilot消息通知。"
+    plugin_desc = "通过NapCat（OneBot11）接口与QQ双向交互：向好友或群聊发送通知，并接收QQ消息作为远程命令控制MoviePilot。"
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/NapNeko?v=4"
     # 插件版本，需与 package.v3.json 中保持一致
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.0"
     # 插件作者
     plugin_author = "monkeycode"
     # 作者主页
@@ -38,6 +44,9 @@ class NapCatMsg(_PluginBase):
     _send_groups = None
     _at_all = False
     _msgtypes = []
+    _interaction = False
+    _report_token = None
+    _admin_users = None
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -49,6 +58,9 @@ class NapCatMsg(_PluginBase):
             self._send_groups = config.get("send_groups")
             self._at_all = config.get("at_all")
             self._msgtypes = config.get("msgtypes") or []
+            self._interaction = config.get("interaction")
+            self._report_token = config.get("report_token")
+            self._admin_users = config.get("admin_users")
 
         if self._onlyonce:
             logger.info("立即测试一次QQ消息发送")
@@ -62,28 +74,45 @@ class NapCatMsg(_PluginBase):
                 "send_groups": self._send_groups,
                 "at_all": self._at_all,
                 "msgtypes": self._msgtypes,
+                "interaction": self._interaction,
+                "report_token": self._report_token,
+                "admin_users": self._admin_users,
             })
             self._send("QQ消息通知测试", "NapCat消息通知插件已启用，收到本条消息即代表MoviePilot与NapCat对接成功。")
 
     def get_state(self) -> bool:
-        return self._enabled and bool(self._host) and (
-            bool(self._parse_ids(self._send_users)) or bool(self._parse_ids(self._send_groups))
-        )
+        return bool(self._enabled and self._host and (
+            self._parse_ids(self._send_users)
+            or self._parse_ids(self._send_groups)
+            or self._interaction
+        ))
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         return []
 
     def get_api(self) -> List[Dict[str, Any]]:
-        return []
+        """
+        注册NapCat OneBot11 HTTP上报接收端点，外部回调接口使用独立令牌校验
+        """
+        return [
+            {
+                "path": "/report",
+                "endpoint": self.report,
+                "methods": ["POST"],
+                "auth": "apikey",
+                "allow_anonymous": True,
+                "summary": "NapCat消息上报",
+            }
+        ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """
         拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构
         """
-        # 遍历 NotificationType 枚举，生成消息类型选项
+        # 遍历 MessageType 枚举，生成消息类型选项
         MsgTypeOptions = []
-        for item in NotificationType:
+        for item in MessageType:
             MsgTypeOptions.append({
                 "title": item.value,
                 "value": item.name
@@ -247,6 +276,66 @@ class NapCatMsg(_PluginBase):
                                 ]
                             }
                         ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 12
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'interaction',
+                                            'label': '启用双向交互（接收QQ消息执行远程命令）',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'report_token',
+                                            'label': '上报令牌（可选）',
+                                            'placeholder': '与NapCat HTTP上报配置中的Token一致',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'admin_users',
+                                            'label': '可交互QQ号（留空允许全部）',
+                                            'placeholder': '允许发送命令的QQ号，多个用英文逗号分隔',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }
@@ -259,6 +348,9 @@ class NapCatMsg(_PluginBase):
             "send_groups": "",
             "at_all": False,
             "msgtypes": [],
+            "interaction": False,
+            "report_token": "",
+            "admin_users": "",
         }
 
     def get_page(self) -> Optional[List[dict]]:
@@ -278,22 +370,144 @@ class NapCatMsg(_PluginBase):
                 result.append(int(item))
         return result
 
+    # OneBot11 CQ码（如@通知）正则，用于提取纯文本命令
+    _CQ_CODE_RE = re.compile(r"\[CQ:[^\]]+\]")
+
+    @staticmethod
+    def _extract_text(body: dict) -> Optional[str]:
+        """
+        从OneBot11消息事件中提取文本内容
+        """
+        raw = body.get("raw_message")
+        if isinstance(raw, str) and raw.strip():
+            # 去除@通知等CQ码，仅保留有效文本
+            text = NapCatMsg._CQ_CODE_RE.sub("", raw).strip()
+            if text:
+                return text
+        # 回退：拼接message数组中的文本段
+        segments = body.get("message")
+        parts = []
+        if isinstance(segments, list):
+            for seg in segments:
+                if isinstance(seg, dict) and seg.get("type") == "text":
+                    text = seg.get("data", {}).get("text")
+                    if text:
+                        parts.append(str(text))
+        if parts:
+            return "".join(parts).strip()
+        return None
+
+    def _verify_report_token(self, request: Request) -> bool:
+        """
+        校验NapCat上报请求的令牌；未配置上报令牌时放行
+        """
+        expected = (self._report_token or "").strip()
+        if not expected:
+            return True
+        # OneBot11 HTTP上报：Authorization: Bearer <token>
+        auth_header = request.headers.get("authorization") or ""
+        if auth_header.startswith("Bearer ") and hmac.compare_digest(
+                auth_header[7:].strip(), expected):
+            return True
+        # 兼容URL携带token / access_token参数
+        for key in ("token", "access_token"):
+            value = request.query_params.get(key)
+            if value and hmac.compare_digest(value, expected):
+                return True
+        return False
+
+    def _is_admin_user(self, user_id: Any) -> bool:
+        """
+        判断QQ用户是否允许执行交互命令
+        """
+        admins = self._parse_ids(self._admin_users)
+        if not admins:
+            return True
+        try:
+            return int(user_id) in admins
+        except (TypeError, ValueError):
+            return False
+
+    async def report(self, request: Request) -> Dict[str, Any]:
+        """
+        接收NapCat OneBot11 HTTP上报消息，转发给MoviePilot消息链处理
+        """
+        if not self.get_state() or not self._interaction:
+            return {"status": "ignored"}
+        if not self._verify_report_token(request):
+            logger.warning("NapCat消息上报鉴权失败，请检查插件的上报令牌配置")
+            return {"status": "forbidden"}
+        try:
+            body = await request.json()
+        except Exception:
+            return {"status": "bad_request"}
+        if not isinstance(body, dict) or body.get("post_type") != "message":
+            # 心跳、元事件等直接忽略
+            return {"status": "ok"}
+
+        message_type = body.get("message_type")
+        user_id = body.get("user_id")
+        text = self._extract_text(body)
+        if not user_id or not text:
+            return {"status": "ok"}
+        if not self._is_admin_user(user_id):
+            logger.info(f"QQ用户 {user_id} 不在可交互名单中，已忽略命令：{text[:20]}")
+            return {"status": "ok"}
+
+        sender = (body.get("sender") or {}).get("nickname") or str(user_id)
+        # 群聊消息在文本前附加群标识，便于日志追踪；回复仍走私聊
+        if message_type == "group":
+            group_id = body.get("group_id")
+            logger.info(f"收到QQ群[{group_id}]用户[{user_id}]命令：{text[:50]}")
+        else:
+            logger.info(f"收到QQ私聊用户[{user_id}]命令：{text[:50]}")
+
+        thread = threading.Thread(
+            target=self._handle_inbound,
+            args=(user_id, sender, text, body.get("message_id")),
+            daemon=True,
+        )
+        thread.start()
+        return {"status": "ok"}
+
+    def _handle_inbound(self, userid: Any, username: str, text: str, message_id: Any = None):
+        """
+        后台调用MoviePilot消息链处理入站命令
+        """
+        try:
+            MessageChain().handle_message(
+                channel=NotificationChannel.QQ,
+                source="NapCat",
+                userid=userid,
+                username=username,
+                text=text,
+                original_message_id=message_id,
+            )
+        except Exception as e:
+            logger.error(f"处理QQ消息命令异常：{str(e)}")
+            self._send_reply("命令执行失败", f"处理命令时出现异常：{str(e)[:200]}", userid)
+
+    def _build_targets(self) -> List[Tuple[str, Dict[str, Any], str]]:
+        """
+        根据配置组装广播发送目标：私聊、群聊
+        """
+        targets = []
+        for user_id in self._parse_ids(self._send_users):
+            targets.append(("send_private_msg", {"user_id": user_id}, f"私聊[{user_id}]"))
+        for group_id in self._parse_ids(self._send_groups):
+            targets.append(("send_group_msg", {"group_id": group_id}, f"群聊[{group_id}]"))
+        return targets
+
     def _send(self, title: str, text: str, image: Optional[str] = None) -> Optional[Tuple[bool, str]]:
         """
-        通过NapCat的OneBot11 HTTP接口发送QQ消息
+        通过NapCat的OneBot11 HTTP接口向配置的所有目标发送广播消息
         :param title: 标题
         :param text: 内容
         :param image: 图片URL（可选）
         """
         if not self._host:
             return False, "NapCat服务地址未配置"
-
-        # 组装发送目标：私聊、群聊
-        targets = []
-        for user_id in self._parse_ids(self._send_users):
-            targets.append(("send_private_msg", {"user_id": user_id}, f"私聊[{user_id}]"))
-        for group_id in self._parse_ids(self._send_groups):
-            targets.append(("send_group_msg", {"group_id": group_id}, f"群聊[{group_id}]"))
+        targets = self._build_targets()
         if not targets:
             return False, "未配置接收消息的QQ号或群号"
 
@@ -305,7 +519,36 @@ class NapCatMsg(_PluginBase):
         segments.append({"type": "text", "data": {"text": content}})
         if image:
             segments.append({"type": "image", "data": {"url": image}})
+        return self._post_onebot(targets, segments, title)
 
+    def _send_reply(self, title: str, text: str, userid: Any, image: Optional[str] = None) -> Optional[Tuple[bool, str]]:
+        """
+        向单个QQ用户私聊发送交互回复
+        :param title: 标题
+        :param text: 内容
+        :param userid: 回复目标QQ号
+        :param image: 图片URL（可选）
+        """
+        if not self._host:
+            return False, "NapCat服务地址未配置"
+        try:
+            target_user = int(userid)
+        except (TypeError, ValueError):
+            logger.warning(f"交互回复用户ID无效：{userid}")
+            return False, "无效用户ID"
+        content = f"{title}\n{text}" if text else title
+        segments = [{"type": "text", "data": {"text": content}}]
+        if image:
+            segments.append({"type": "image", "data": {"url": image}})
+        return self._post_onebot(
+            [("send_private_msg", {"user_id": target_user}, f"私聊[{target_user}]")],
+            segments, title)
+
+    def _post_onebot(self, targets: List[Tuple[str, Dict[str, Any], str]],
+                     segments: List[dict], title: str) -> Tuple[bool, str]:
+        """
+        调用NapCat OneBot11 HTTP接口向指定目标发送消息
+        """
         # OneBot11 HTTP鉴权：同时支持Bearer请求头和access_token参数
         headers = None
         if self._token:
@@ -360,19 +603,30 @@ class NapCatMsg(_PluginBase):
             return
 
         msg_body = event.event_data
-        # 已指定发送渠道的消息不再重复发送
-        channel = msg_body.get("channel")
-        if channel:
-            return
         # 类型
-        msg_type: NotificationType = msg_body.get("type")
+        msg_type: MessageType = msg_body.get("type")
         # 标题
         title = msg_body.get("title")
         # 文本
         text = msg_body.get("text")
         # 图片
         image = msg_body.get("image")
+        # 渠道：兼容枚举成员与字符串两种事件数据形式
+        channel = msg_body.get("channel")
+        channel_value = getattr(channel, "value", channel)
 
+        if channel_value == NotificationChannel.QQ.value:
+            # MoviePilot双向交互回复：定向发回来源用户
+            userid = msg_body.get("userid")
+            if not userid or (not title and not text):
+                return
+            return self._send_reply(title, text, userid, image)
+
+        if channel_value:
+            # 其他渠道的消息不处理
+            return
+
+        # 已指定发送渠道的消息不再重复发送
         if not title and not text:
             logger.warning("标题和内容不能同时为空")
             return

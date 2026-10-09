@@ -1,22 +1,30 @@
-# MoviePilot 对接 NapCat QQ 消息通知
+# MoviePilot 对接 NapCat QQ 消息通知与远程命令
 
 本仓库提供 MoviePilot 与 NapCatQQ 对接的完整方案，同时适配 V3 与 V2：
 
 - `plugins.v3/napcatmsg/`：V3 插件「QQ消息通知（NapCat）」（基于 `app.sdk` 稳定接口，MoviePilot v3.1.0 验证目标）
 - `package.v3.json`：V3 插件市场索引，V3 宿主可直接把本仓库添加为插件市场
-- `plugins.v2/napcatmsg/`：V2 插件（旧版本 MoviePilot 宿主使用）
+- `plugins.v2/napcatmsg/`：V2 插件（旧版本 MoviePilot 宿主使用，仅单向通知）
 - `package.v2.json`：V2 插件市场索引
 - `docker-compose.yml` + `.env.example`：MoviePilot V3 + NapCat 一键部署编排
 
-插件通过 NapCat 的 OneBot 11 HTTP 接口，把 MoviePilot 的通知转发到 QQ 好友私聊或群聊，支持消息类型过滤、@全体成员与图片消息。
+插件通过 NapCat 的 OneBot 11 HTTP 接口，把 MoviePilot 的通知转发到 QQ 好友私聊或群聊，支持消息类型过滤、@全体成员与图片消息；V3 插件还支持双向交互——在 QQ 里发送命令即可远程控制 MoviePilot（搜索、订阅、识别等，与内置微信/Telegram 机器人命令一致）。
 
 消息链路：
 
 ```
+通知下发：
 MoviePilot（通知事件）
     -> NapCatMsg插件（OneBot 11 HTTP API：send_private_msg / send_group_msg）
     -> NapCat（QQ协议端）
     -> QQ好友 / QQ群
+
+命令上报（仅V3双向交互）：
+QQ好友 / QQ群
+    -> NapCat（OneBot 11 HTTP上报）
+    -> NapCatMsg插件（/report 接口）
+    -> MoviePilot消息链（执行远程命令）
+    -> 插件私聊回复执行结果
 ```
 
 ## 快速开始（Docker Compose 全新部署）
@@ -73,7 +81,23 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
    - 群号（群聊）：接收通知的群号，多个用英文逗号分隔
    - 群消息@全体成员：按需开启
    - 消息类型：留空发送全部类型，也可只勾选需要的类型
+   - 启用双向交互：需要远程命令时开启（配置方法见下节）
 4. 打开「测试插件（立即运行）」开关保存，配置的 QQ 和群应立即收到测试消息
+
+### 6.（可选）开启双向交互：QQ 消息作为远程命令
+
+1. 在插件配置中：
+   - 启用双向交互：开
+   - 上报令牌：设置一个随机字符串（推荐，与 NapCat HTTP 上报的 Token 一致）
+   - 可交互QQ号：允许发送命令的 QQ 号（留空表示允许所有人，强烈建议配置）
+2. 在 NapCat WebUI 中：`网络配置` -> `新建` -> `HTTP上报`：
+   - 启用：勾选
+   - URL：`http://moviepilot:3000/api/v1/plugin/NapCatMsg/report`（容器内服务名跨机部署时换成实际地址）
+   - Token：与插件「上报令牌」一致
+   - 上报类型：保持默认即可
+3. 保存后用配置的 QQ 号私聊机器人发送 `/search 头文字D`，机器人应私聊回复搜索结果
+
+命令与 MoviePilot 内置 Telegram/微信机器人的命令语法一致（`/search`、`/subscribe`、`/rename` 等，可在 `设定` -> `服务` 中查看命令列表）。群聊中发送命令同样生效，回复会私聊发给发送者。
 
 ## 已有 MoviePilot 环境（只装插件）
 
@@ -101,6 +125,22 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 | 群号（群聊） | 调用 `send_group_msg` 的目标，多个用逗号分隔 |
 | 群消息@全体成员 | 开启后群聊消息追加 `@全体成员` 消息段 |
 | 消息类型 | 按通知类型过滤，留空为全部发送 |
+| 启用双向交互 | 开启后接收 QQ 消息作为远程命令（仅 V3 插件支持） |
+| 上报令牌 | NapCat HTTP 上报的鉴权 Token，留空表示不校验（不建议） |
+| 可交互QQ号 | 允许发送命令的 QQ 号，留空允许所有人（强烈建议配置） |
+
+## 双向交互（V3 插件）
+
+开启后，在 QQ 中给机器人发消息即可远程控制 MoviePilot：
+
+- 命令语法与 MoviePilot 内置 Telegram/微信机器人一致：`/search 关键词` 搜索、`/subscribe 标题 [TMDBID]` 添加订阅、`/renew` 重新识别等，完整命令可在 MoviePilot `设定` -> `服务` 中查看
+- 私聊和群聊均可发送命令；执行结果会私聊回复给发送者
+- 群聊中 @机器人 发送的命令会自动去除 @ 前缀
+- 通过 NapCat 的「HTTP上报」功能把 QQ 消息推送到插件端点 `/api/v1/plugin/NapCatMsg/report`，插件校验上报令牌后转交 MoviePilot 消息链处理
+- 收到的命令只在「可交互QQ号」名单内的用户生效，防止陌生人滥用
+- 命令在后台线程执行，上报接口立即返回，不影响 NapCat 其他事件上报
+
+安全建议：务必设置「上报令牌」并配置「可交互QQ号」。上报端点无需 MoviePilot 登录态（NapCat 无法提供），仅靠上报令牌校验，令牌泄露等于把 MoviePilot 命令权限开放给外部。
 
 ## 常见问题
 
@@ -114,7 +154,11 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 
 **QQ 掉线频繁**：建议使用活跃度较高的小号，长期使用请开启设备锁，并保持登录态目录 `./napcat/qq` 持久化。
 
-**安全提示**：6099（WebUI）与 OneBot 端口请勿直接暴露公网；Token 建议设置为 16 位以上随机字符串。
+**QQ 发命令无反应**：依次检查：1) NapCat WebUI「网络配置」中 HTTP上报 已启用且 URL 为 `http://moviepilot:3000/api/v1/plugin/NapCatMsg/report`；2) 上报 Token 与插件「上报令牌」一致；3) 插件已开启「双向交互」且发送者 QQ 在「可交互QQ号」名单内；4) MoviePilot 日志中搜索「收到QQ」，确认消息是否到达插件。
+
+**双向交互回复了「命令执行失败」**：查看 MoviePilot 运行日志定位异常堆栈；多数情况是 TMDB 网络问题或媒体库访问异常。
+
+**安全提示**：6099（WebUI）与 OneBot 端口请勿直接暴露公网；Token 建议设置为 16 位以上随机字符串；开启双向交互后务必配置「上报令牌」与「可交互QQ号」。
 
 ## 目录结构
 
