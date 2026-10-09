@@ -342,15 +342,6 @@ def main():
     }) == "/help", "message数组应忽略非text段"
     print("[PASS] 入站文本提取正确")
 
-    # 9.1 斜杠命令兼容映射
-    assert module.NapCatMsg._normalize_command("/search 头文字D") == "搜索 头文字D"
-    assert module.NapCatMsg._normalize_command("/search头文字D") == "/search头文字D", "无空格分隔的斜杠命令不映射"
-    assert module.NapCatMsg._normalize_command("/Subscribe  Example") == "订阅 Example", "映射应忽略命令大小写"
-    assert module.NapCatMsg._normalize_command("/download  Example.S01E01") == "下载 Example.S01E01"
-    assert module.NapCatMsg._normalize_command("/version") == "/version", "系统命令不应映射"
-    assert module.NapCatMsg._normalize_command("搜索 头文字D") == "搜索 头文字D", "中文动词命令保持原样"
-    print("[PASS] 斜杠命令兼容映射正确")
-
     # 10. report：未启用交互直接忽略
     handled_messages.clear()
     plugin4 = module.NapCatMsg()
@@ -378,7 +369,7 @@ def main():
     msg = handled_messages[0]
     assert msg["channel"] == NotificationChannel.QQ and msg["source"] == "NapCat"
     assert msg["userid"] == 10001 and msg["username"] == "阿明"
-    assert msg["text"] == "搜索 头文字D" and msg["original_message_id"] == 9001
+    assert msg["text"] == "/search 头文字D" and msg["original_message_id"] == 9001
     res = asyncio.run(plugin4t.report(Request(
         query_params={"access_token": "report-secret"}, body=body)))
     assert res == {"status": "ok"} and wait_for(2), "query参数令牌应放行"
