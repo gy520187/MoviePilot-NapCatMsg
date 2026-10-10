@@ -10,6 +10,8 @@
 
 插件通过 NapCat 的 OneBot 11 HTTP 接口，把 MoviePilot 的通知转发到 QQ 好友私聊或群聊，支持消息类型过滤、@全体成员与图片消息；V3 插件还支持双向交互——在 QQ 里发送命令即可远程控制 MoviePilot（搜索、订阅、识别等，与内置微信/Telegram 机器人命令一致）。
 
+V3 插件完整接管 MoviePilot 的 QQ 消息渠道：既通过通知事件广播覆盖全部未指定渠道的通知，又通过 `post_message` 模块方法接管 QQ 渠道定向消息（双向交互回复、用户绑定 QQ 通知目标的按用户推送），两条路径互斥分区，消息不重不漏。
+
 消息链路：
 
 ```
@@ -18,6 +20,11 @@ MoviePilot（通知事件）
     -> NapCatMsg插件（OneBot 11 HTTP API：send_private_msg / send_group_msg）
     -> NapCat（QQ协议端）
     -> QQ好友 / QQ群
+
+V3 双路径分发（互斥分区，不重复）：
+广播通知（未指定渠道）    -> NoticeMessage事件广播 -> 插件按配置的QQ号/群号发送（msgtypes过滤）
+QQ渠道定向消息           -> post_message模块分发  -> 插件按userid私聊回复
+用户绑定QQ目标的通知      -> post_message模块分发  -> 插件按绑定目标定向发送
 
 命令上报（仅V3双向交互）：
 QQ好友 / QQ群
@@ -123,13 +130,34 @@ compose 使用 V3 镜像 `jxxghp/moviepilot-v3:latest`。两个容器的角色�
 |--------|------|
 | NapCat服务地址 | NapCat OneBot HTTP 服务器地址，如 `http://napcat:3000`；跨机部署填实际 IP |
 | AccessToken | OneBot 鉴权令牌，同时通过 `Authorization: Bearer` 头和 `access_token` 参数传递 |
-| QQ号（私聊） | 调用 `send_private_msg` 的目标，多个用逗号分隔 |
-| 群号（群聊） | 调用 `send_group_msg` 的目标，多个用逗号分隔 |
+| QQ号（私聊） | 调用 `send_private_msg` 的目标，多个用逗号分隔；用户未绑定 QQ 目标时的全局默认目标 |
+| 群号（群聊） | 调用 `send_group_msg` 的目标，多个用逗号分隔；用户未绑定 QQ 目标时的全局默认目标 |
 | 群消息@全体成员 | 开启后群聊消息追加 `@全体成员` 消息段 |
 | 消息类型 | 按通知类型过滤，留空为全部发送 |
 | 启用双向交互 | 开启后接收 QQ 消息作为远程命令（仅 V3 插件支持） |
 | 上报令牌 | NapCat HTTP 上报的鉴权 Token，留空表示不校验（不建议） |
 | 可交互QQ号 | 允许发送命令的 QQ 号，留空允许所有人（强烈建议配置） |
+
+## 完整接管与按用户推送（V3 插件）
+
+V3 插件把 NapCat 实现为 MoviePilot 的完整 QQ 渠道，三种下发场景全覆盖：
+
+| 场景 | 分发路径 | 行为 |
+|------|----------|------|
+| 普通通知（未指定渠道） | NoticeMessage 事件广播 | 发送到插件配置的全部 QQ 号/群号，按消息类型开关过滤 |
+| QQ 渠道定向消息（双向交互回复） | `post_message` 模块分发 | 私聊回复消息指定的 userid |
+| 用户绑定 QQ 通知目标 | `post_message` 模块分发 | 按绑定目标定向发送 |
+
+两条路径按渠道/目标互斥分区，同一条通知至多发送一次。
+
+### 用户绑定 QQ 通知目标
+
+多用户场景下，每个用户可在 MoviePilot「个人设置 -> 通知设置」中绑定 QQ 目标，绑定后该用户的按用户路由通知定向送达其 QQ：
+
+- 私聊目标键：`qq_userid` 或 `qq_openid`（填 QQ 号）
+- 群聊目标键：`qq_group` 或 `qq_group_openid`（填群号）
+
+目标键与官方 QQ 机器人模块保持一致；用户绑定 QQ 目标后通知只发绑定目标，未绑定的用户回落到插件配置的全局 QQ 号/群号广播。
 
 ## 双向交互（V3 插件）
 

@@ -442,36 +442,109 @@ def main():
         "失败回复应包含异常提示"
     print("[PASS] 群聊命令处理与异常兜底正确")
 
-    # 14. send：QQ渠道消息定向私聊回复（枚举与字符串两种形式）
+    # 14. post_message 模块路径：channel=QQ 定向私聊（枚举与字符串两种形式）
+    captured_requests.clear()
+
+    class _FakeMessage:
+        def __init__(self, channel=None, userid=None, title=None, text=None,
+                     image=None, targets=None):
+            self.channel = channel
+            self.userid = userid
+            self.title = title
+            self.text = text
+            self.image = image
+            self.targets = targets
+
+    module_table = plugin.get_module()
+    assert isinstance(module_table, dict) and set(module_table) == {
+        "post_message", "post_medias_message", "post_torrents_message"}, \
+        "get_module应声明post_message与两个候选消息模块方法"
+
+    module_table["post_message"](_FakeMessage(
+        channel=NotificationChannel.QQ, userid=10001,
+        title="执行完成", text="已搜索到3条结果"))
+    assert len(captured_requests) == 1, "QQ渠道定向消息应只发一条"
+    assert captured_requests[0]["url"].startswith("http://napcat:3000/send_private_msg?access_token=my-token")
+    assert captured_requests[0]["data"]["user_id"] == 10001, "回复应定向发给来源用户"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        channel="QQ", userid="10001", title="执行完成", text="字符串渠道兼容"))
+    assert len(captured_requests) == 1 and captured_requests[0]["data"]["user_id"] == 10001, \
+        "字符串形式的QQ渠道也应定向回复"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(channel=NotificationChannel.QQ, title="无目标"))
+    assert len(captured_requests) == 0, "QQ渠道消息缺少userid时不应发送"
+    module_table["post_message"](None)
+    assert len(captured_requests) == 0, "空消息不应发送"
+    print("[PASS] post_message 模块路径：QQ渠道定向回复正确")
+
+    # 14.1 post_message 模块路径：非QQ渠道跳过（避免与其他渠道重复发送）
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        channel=NotificationChannel.Telegram, userid=10001, title="TG消息", text="x"))
+    module_table["post_message"](_FakeMessage(
+        channel="Wechat", userid=10001, title="微信消息", text="x"))
+    assert len(captured_requests) == 0, "其他渠道的模块分发消息不应发送"
+    print("[PASS] post_message 模块路径：非QQ渠道过滤正确")
+
+    # 14.2 post_message 模块路径：用户通知设置绑定的QQ目标定向发送
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        userid=None, title="下载完成", text="Example.S01E01",
+        targets={"qq_userid": "10001"}))
+    assert len(captured_requests) == 1, "绑定qq_userid应定向私聊一条"
+    assert captured_requests[0]["data"]["user_id"] == 10001, "绑定目标应解析为私聊目标"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        title="站点消息", targets={"qq_group": "88888888"}))
+    assert len(captured_requests) == 1, "绑定qq_group应定向群聊一条"
+    assert captured_requests[0]["data"]["group_id"] == 88888888, "群目标应解析为群聊"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        title="多目标", targets={"qq_userid": "10001", "qq_openid": "20002",
+                                 "qq_group_openid": "88888888"}))
+    assert len(captured_requests) == 3, "多QQ目标键应全部发送（2私聊+1群聊）"
+    assert [r["data"].get("user_id") for r in captured_requests[:2]] == [10001, 20002], \
+        "qq_userid与qq_openid都应解析为私聊"
+    assert captured_requests[2]["data"]["group_id"] == 88888888, "qq_group_openid应解析为群聊"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        title="混合渠道", targets={"qq_userid": "10001", "telegram_userid": "tg001"}))
+    assert len(captured_requests) == 1, "含QQ目标键时应只发QQ目标"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        title="无QQ目标", targets={"telegram_userid": "tg001"}))
+    assert len(captured_requests) == 0, "targets无QQ目标键时应跳过（由事件广播路径兜底）"
+    module_table["post_message"](_FakeMessage(title="无targets"))
+    assert len(captured_requests) == 0, "无targets的广播消息应由事件路径处理"
+    captured_requests.clear()
+    module_table["post_message"](_FakeMessage(
+        title="非法目标", targets={"qq_userid": "abc,10001"}))
+    assert len(captured_requests) == 1, "非法目标值应跳过，合法目标继续发送"
+    assert captured_requests[0]["data"]["user_id"] == 10001
+    print("[PASS] post_message 模块路径：QQ绑定目标解析正确")
+
+    # 14.3 NoticeMessage 事件路径收敛：QQ渠道与QQ绑定目标消息跳过（模块路径负责，避免重复）
     captured_requests.clear()
     plugin.send(Event(EventType.NoticeMessage, {
         "channel": NotificationChannel.QQ,
         "userid": 10001, "title": "执行完成", "text": "已搜索到3条结果",
     }))
-    assert len(captured_requests) == 1, "QQ渠道回复应只发一条"
-    assert captured_requests[0]["url"].startswith("http://napcat:3000/send_private_msg?access_token=my-token")
-    assert captured_requests[0]["data"]["user_id"] == 10001, "回复应定向发给来源用户"
-    captured_requests.clear()
     plugin.send(Event(EventType.NoticeMessage, {
         "channel": "QQ", "userid": 10001, "title": "执行完成", "text": "字符串渠道兼容",
     }))
-    assert len(captured_requests) == 1 and captured_requests[0]["data"]["user_id"] == 10001, \
-        "字符串形式的QQ渠道也应定向回复"
-    captured_requests.clear()
-    plugin.send(Event(EventType.NoticeMessage, {"channel": "QQ", "userid": 10001}))
-    assert len(captured_requests) == 0, "标题内容均为空的回复不应发送"
-    print("[PASS] QQ渠道双向回复正确")
+    assert len(captured_requests) == 0, "channel=QQ的事件应由模块路径处理，事件路径跳过"
+    plugin.send(Event(EventType.NoticeMessage, {
+        "title": "绑定目标通知", "text": "x", "targets": {"qq_userid": "10001"},
+    }))
+    assert len(captured_requests) == 0, "targets含QQ目标键的事件应由模块路径处理，事件路径跳过"
+    plugin.send(Event(EventType.NoticeMessage, {
+        "title": "其他渠道绑定", "text": "x", "targets": {"telegram_userid": "tg001"},
+    }))
+    assert len(captured_requests) == 3, "targets无QQ目标键时保持广播行为（回落插件配置目标）"
+    print("[PASS] NoticeMessage 事件路径与模块路径互斥分区正确")
 
     # 15. get_module：媒体/种子候选列表经模块分发转发QQ私聊
-    module_table = plugin.get_module()
-    assert isinstance(module_table, dict) and set(module_table) == {
-        "post_medias_message", "post_torrents_message"}, "get_module应声明两个候选消息模块方法"
-
-    class _FakeMessage:
-        def __init__(self, channel=None, userid=None, title=None):
-            self.channel = channel
-            self.userid = userid
-            self.title = title
 
     class _FakeMedia:
         def __init__(self, title, year=None, vote_average=None):

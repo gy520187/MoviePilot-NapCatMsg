@@ -20,11 +20,11 @@ class NapCatMsg(_PluginBase):
     # 插件名称
     plugin_name = "QQ消息通知（NapCat）"
     # 插件描述
-    plugin_desc = "通过NapCat（OneBot11）接口与QQ双向交互：向好友或群聊发送通知，并接收QQ消息作为远程命令控制MoviePilot。"
+    plugin_desc = "通过NapCat（OneBot11）接口完整接管QQ渠道：向好友或群聊发送全部通知，支持按用户绑定通知目标，并接收QQ消息作为远程命令控制MoviePilot。"
     # 插件图标
     plugin_icon = "https://avatars.githubusercontent.com/NapNeko?v=4"
     # 插件版本，需与 package.v3.json 中保持一致
-    plugin_version = "1.1.5"
+    plugin_version = "1.2.0"
     # 插件作者
     plugin_author = "monkeycode"
     # 作者主页
@@ -48,6 +48,11 @@ class NapCatMsg(_PluginBase):
     _interaction = False
     _report_token = None
     _admin_users = None
+
+    # 用户通知设置中的QQ目标键，与官方QQ机器人模块保持一致，
+    # 私聊键与群聊键分开解析，命中即视为QQ渠道定向消息
+    _QQ_USER_TARGET_KEYS = ("qq_userid", "qq_openid")
+    _QQ_GROUP_TARGET_KEYS = ("qq_group_openid", "qq_group")
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -90,14 +95,91 @@ class NapCatMsg(_PluginBase):
 
     def get_module(self) -> Optional[Dict[str, Any]]:
         """
-        声明插件模块方法，参与宿主模块分发：拦截发往QQ渠道的媒体/种子候选列表
-        消息（post_medias_message/post_torrents_message走消息队列直投模块，不广播
-        NoticeMessage事件），将其文本化后私聊回复给发起交互的QQ用户
+        声明插件模块方法，参与宿主模块分发：
+        - post_message：接管channel=QQ的定向消息（交互回复）与
+          targets含QQ目标键的按用户路由通知
+        - post_medias_message/post_torrents_message：拦截发往QQ渠道的
+          媒体/种子候选列表消息（走消息队列直投模块，不广播NoticeMessage事件），
+          将其文本化后私聊回复给发起交互的QQ用户
+        事件广播与模块分发两条路径按渠道/目标互斥分区，避免重复发送
         """
         return {
+            "post_message": self._module_post_message,
             "post_medias_message": self._module_post_medias_message,
             "post_torrents_message": self._module_post_torrents_message,
         }
+
+    def _module_post_message(self, message, **kwargs) -> None:
+        """
+        模块方法：接管宿主定向投递的QQ渠道消息
+        - channel=QQ：按message.userid定向私聊（双向交互回复）
+        - channel为空且targets含QQ目标键：按用户通知设置绑定的目标定向发送
+        - 其余消息交由NoticeMessage事件广播路径处理，此处跳过
+        """
+        if message is None:
+            return
+        channel = getattr(message, "channel", None)
+        channel_value = getattr(channel, "value", channel)
+        if channel_value:
+            if channel_value != NotificationChannel.QQ.value:
+                return
+            userid = getattr(message, "userid", None)
+            if not userid:
+                logger.warning("QQ渠道定向消息缺少userid，无法发送")
+                return
+            self._send_reply(
+                getattr(message, "title", None) or "",
+                getattr(message, "text", None) or "",
+                userid,
+                getattr(message, "image", None))
+            return
+        targets = getattr(message, "targets", None) or {}
+        parsed = self._parse_notification_targets(targets)
+        if not parsed:
+            return
+        self._post_onebot(
+            parsed,
+            self._build_segments(
+                getattr(message, "title", None) or "",
+                getattr(message, "text", None) or "",
+                getattr(message, "image", None)),
+            getattr(message, "title", None) or "QQ通知")
+
+    def _parse_notification_targets(self, targets: Any) -> List[Tuple[str, Dict[str, Any], str]]:
+        """
+        从通知targets字典解析QQ发送目标，目标键与官方QQ机器人模块一致
+        私聊键：qq_userid / qq_openid；群聊键：qq_group_openid / qq_group
+        """
+        if not isinstance(targets, dict):
+            return []
+        parsed = []
+        for key in self._QQ_USER_TARGET_KEYS:
+            for user_id in self._parse_target_ids(targets.get(key)):
+                parsed.append(("send_private_msg", {"user_id": user_id}, f"私聊[{user_id}]"))
+        for key in self._QQ_GROUP_TARGET_KEYS:
+            for group_id in self._parse_target_ids(targets.get(key)):
+                parsed.append(("send_group_msg", {"group_id": group_id}, f"群聊[{group_id}]"))
+        return parsed
+
+    @staticmethod
+    def _parse_target_ids(value: Any) -> List[int]:
+        """
+        解析单个或逗号分隔的目标ID，非法值跳过并记录日志
+        """
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            items = value
+        else:
+            items = str(value).replace("，", ",").split(",")
+        result = []
+        for item in items:
+            item = str(item).strip()
+            if item.isdigit():
+                result.append(int(item))
+            elif item:
+                logger.warning(f"通知目标值非法，已跳过：{item[:20]}")
+        return result
 
     def _module_post_medias_message(self, message, medias) -> None:
         """
@@ -627,6 +709,21 @@ class NapCatMsg(_PluginBase):
             targets.append(("send_group_msg", {"group_id": group_id}, f"群聊[{group_id}]"))
         return targets
 
+    @staticmethod
+    def _build_segments(title: str, text: str, image: Optional[str],
+                        at_all: bool = False) -> List[Dict[str, Any]]:
+        """
+        组装OneBot11消息段：文本、可选@全体成员、可选图片
+        """
+        content = f"{title}\n{text}" if text else title
+        segments = []
+        if at_all:
+            segments.append({"type": "at", "data": {"qq": "all"}})
+        segments.append({"type": "text", "data": {"text": content}})
+        if image:
+            segments.append({"type": "image", "data": {"url": image}})
+        return segments
+
     def _send(self, title: str, text: str, image: Optional[str] = None) -> Optional[Tuple[bool, str]]:
         """
         通过NapCat的OneBot11 HTTP接口向配置的所有目标发送广播消息
@@ -639,16 +736,8 @@ class NapCatMsg(_PluginBase):
         targets = self._build_targets()
         if not targets:
             return False, "未配置接收消息的QQ号或群号"
-
-        # 组装消息段：文本、可选@全体成员、可选图片
-        content = f"{title}\n{text}" if text else title
-        segments = []
-        if self._at_all:
-            segments.append({"type": "at", "data": {"qq": "all"}})
-        segments.append({"type": "text", "data": {"text": content}})
-        if image:
-            segments.append({"type": "image", "data": {"url": image}})
-        return self._post_onebot(targets, segments, title)
+        return self._post_onebot(
+            targets, self._build_segments(title, text, image, at_all=self._at_all), title)
 
     def _send_reply(self, title: str, text: str, userid: Any, image: Optional[str] = None) -> Optional[Tuple[bool, str]]:
         """
@@ -665,13 +754,9 @@ class NapCatMsg(_PluginBase):
         except (TypeError, ValueError):
             logger.warning(f"交互回复用户ID无效：{userid}")
             return False, "无效用户ID"
-        content = f"{title}\n{text}" if text else title
-        segments = [{"type": "text", "data": {"text": content}}]
-        if image:
-            segments.append({"type": "image", "data": {"url": image}})
         return self._post_onebot(
             [("send_private_msg", {"user_id": target_user}, f"私聊[{target_user}]")],
-            segments, title)
+            self._build_segments(title, text, image), title)
 
     def _post_onebot(self, targets: List[Tuple[str, Dict[str, Any], str]],
                      segments: List[dict], title: str) -> Tuple[bool, str]:
@@ -724,6 +809,10 @@ class NapCatMsg(_PluginBase):
     def send(self, event: Event):
         """
         监听消息通知事件，转发到NapCat
+
+        该事件路径只负责无渠道的广播通知；channel=QQ的定向消息与
+        targets含QQ目标键的按用户路由通知由post_message模块分发路径
+        处理（宿主每条通知先广播事件再模块分发），此处跳过避免重复发送
         """
         if not self.get_state():
             return
@@ -744,15 +833,12 @@ class NapCatMsg(_PluginBase):
         channel = msg_body.get("channel")
         channel_value = getattr(channel, "value", channel)
 
-        if channel_value == NotificationChannel.QQ.value:
-            # MoviePilot双向交互回复：定向发回来源用户
-            userid = msg_body.get("userid")
-            if not userid or (not title and not text):
-                return
-            return self._send_reply(title, text, userid, image)
-
         if channel_value:
-            # 其他渠道的消息不处理
+            # 指定渠道的消息由模块分发路径或对应渠道处理
+            return
+
+        # targets含QQ目标键的消息已由模块分发路径定向发送，避免向全部目标重复广播
+        if self._parse_notification_targets(msg_body.get("targets")):
             return
 
         # 已指定发送渠道的消息不再重复发送
