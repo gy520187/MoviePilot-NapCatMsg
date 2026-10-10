@@ -26,9 +26,9 @@ class NapCatMsg(_PluginBase):
     # 插件版本，需与 package.v3.json 中保持一致
     plugin_version = "1.2.0"
     # 插件作者
-    plugin_author = "monkeycode"
+    plugin_author = "gy520187"
     # 作者主页
-    author_url = ""
+    author_url = "https://github.com/gy520187"
     # 插件配置项ID前缀
     plugin_config_prefix = "napcatmsg_"
     # 加载顺序
